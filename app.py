@@ -1,676 +1,582 @@
+import os
+import sys
+import concurrent.futures
+import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta
+from io import BytesIO
+from urllib.parse import quote
+
+import numpy as np
+import pandas as pd
+import requests
 import streamlit as st
 import yfinance as yf
-import pandas as pd
-import numpy as np
-import ssl
-import io
-import urllib.request
-import urllib.parse
-import xml.etree.ElementTree as ET
-from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import ta  # Technical Analysis Library
 
-# MAC FIX: Bypasses the SSL certificate error
 try:
-    _create_unverified_https_context = ssl._create_unverified_context
-except AttributeError:
-    pass
-else:
-    ssl._create_default_https_context = _create_unverified_https_context
+    from pykrx import stock as krx_stock
+    PYKRX_AVAILABLE = True
+except ImportError:
+    PYKRX_AVAILABLE = False
 
-# Set the page layout
-st.set_page_config(page_title="Indian Market Screener", layout="wide")
-st.title("🔥 Ultimate Nifty 50 Screener: Absolute Verdict Edition")
-st.write("Scanning NSE equities for technical signals, momentum, news sentiment, and generating Absolute Confluence verdicts.")
+try:
+    import openpyxl
+    OPENPYXL_AVAILABLE = True
+except ImportError:
+    OPENPYXL_AVAILABLE = False
 
-nifty_tickers = [
-    "ADANIENT.NS", "ADANIPORTS.NS", "APOLLOHOSP.NS", "ASIANPAINT.NS", "AXISBANK.NS",
-    "BAJAJ-AUTO.NS", "BAJFINANCE.NS", "BAJAJFINSV.NS", "BEL.NS", "BHARTIARTL.NS",
-    "CIPLA.NS", "COALINDIA.NS", "DRREDDY.NS", "EICHERMOT.NS", "ETERNAL.NS",
-    "GRASIM.NS", "HCLTECH.NS", "HDFCBANK.NS", "HDFCLIFE.NS", "HINDALCO.NS",
-    "HINDUNILVR.NS", "ICICIBANK.NS", "INDIGO.NS", "INFY.NS", "ITC.NS",
-    "JIOFIN.NS", "JSWSTEEL.NS", "KOTAKBANK.NS", "LT.NS", "M&M.NS",
-    "MARUTI.NS", "MAXHEALTH.NS", "NESTLEIND.NS", "NTPC.NS", "ONGC.NS",
-    "POWERGRID.NS", "RELIANCE.NS", "SBILIFE.NS", "SHRIRAMFIN.NS", "SBIN.NS",
-    "SUNPHARMA.NS", "TCS.NS", "TATACONSUM.NS", "TATASTEEL.NS", "TECHM.NS",
-    "TITAN.NS", "TRENT.NS", "ULTRACEMCO.NS", "WIPRO.NS", "TMPV.NS",
-]
 
-TICKER_TO_SEARCH_NAME = {
-    "ADANIENT.NS": "Adani Enterprises", "ADANIPORTS.NS": "Adani Ports",
-    "APOLLOHOSP.NS": "Apollo Hospitals", "ASIANPAINT.NS": "Asian Paints",
-    "AXISBANK.NS": "Axis Bank", "BAJAJ-AUTO.NS": "Bajaj Auto",
-    "BAJFINANCE.NS": "Bajaj Finance", "BAJAJFINSV.NS": "Bajaj Finserv",
-    "BEL.NS": "Bharat Electronics", "BHARTIARTL.NS": "Bharti Airtel",
-    "CIPLA.NS": "Cipla", "COALINDIA.NS": "Coal India",
-    "DRREDDY.NS": "Dr Reddys Laboratories", "EICHERMOT.NS": "Eicher Motors",
-    "ETERNAL.NS": "Eternal Zomato", "GRASIM.NS": "Grasim Industries",
-    "HCLTECH.NS": "HCLTech", "HDFCBANK.NS": "HDFC Bank",
-    "HDFCLIFE.NS": "HDFC Life", "HINDALCO.NS": "Hindalco Industries",
-    "HINDUNILVR.NS": "Hindustan Unilever", "ICICIBANK.NS": "ICICI Bank",
-    "INDIGO.NS": "IndiGo InterGlobe Aviation", "INFY.NS": "Infosys",
-    "ITC.NS": "ITC Limited", "JIOFIN.NS": "Jio Financial Services",
-    "JSWSTEEL.NS": "JSW Steel", "KOTAKBANK.NS": "Kotak Mahindra Bank",
-    "LT.NS": "Larsen Toubro", "M&M.NS": "Mahindra Mahindra",
-    "MARUTI.NS": "Maruti Suzuki", "MAXHEALTH.NS": "Max Healthcare",
-    "NESTLEIND.NS": "Nestle India", "NTPC.NS": "NTPC Limited",
-    "ONGC.NS": "Oil Natural Gas Corporation", "POWERGRID.NS": "Power Grid Corporation",
-    "RELIANCE.NS": "Reliance Industries", "SBILIFE.NS": "SBI Life Insurance",
-    "SHRIRAMFIN.NS": "Shriram Finance", "SBIN.NS": "State Bank of India",
-    "SUNPHARMA.NS": "Sun Pharmaceutical", "TCS.NS": "Tata Consultancy Services",
-    "TATACONSUM.NS": "Tata Consumer Products", "TATASTEEL.NS": "Tata Steel",
-    "TECHM.NS": "Tech Mahindra", "TITAN.NS": "Titan Company",
-    "TRENT.NS": "Trent Limited", "ULTRACEMCO.NS": "UltraTech Cement",
-    "WIPRO.NS": "Wipro Limited", "TMPV.NS": "Tata Motors Passenger Vehicles",
+# =========================================================================
+# STATIC FALLBACK UNIVERSE
+# =========================================================================
+FALLBACK_KOSPI200 = {
+    "005930.KS": "Samsung Electronics", "000660.KS": "SK Hynix", "373220.KS": "LG Energy Solution",
+    "207940.KS": "Samsung Biologics", "005380.KS": "Hyundai Motor", "000270.KS": "Kia",
+    "068270.KS": "Celltrion", "005490.KS": "POSCO Holdings", "035420.KS": "NAVER",
+    "006400.KS": "Samsung SDI", "051910.KS": "LG Chem", "105560.KS": "KB Financial Group",
+    "055550.KS": "Shinhan Financial Group", "086790.KS": "Hana Financial Group", "012330.KS": "Hyundai Mobis",
+    "096770.KS": "SK Innovation", "066570.KS": "LG Electronics", "035720.KS": "Kakao",
+    "032830.KS": "Samsung Life Insurance", "329180.KS": "HD Hyundai Heavy Industries",
+    "015760.KS": "Korea Electric Power", "017670.KS": "SK Telecom", "030200.KS": "KT Corp",
+    "009830.KS": "Hanwha Solutions", "010950.KS": "S-Oil", "011170.KS": "Lotte Chemical",
+    "000810.KS": "Samsung Fire & Marine Insurance", "090430.KS": "Amorepacific", "032640.KS": "LG Uplus",
+    "034020.KS": "Doosan Enerbility", "011200.KS": "HMM", "047810.KS": "Korea Aerospace Industries",
+    "326030.KS": "SK Biopharmaceuticals", "138040.KS": "Meritz Financial Group", "097950.KS": "CJ CheilJedang",
+    "316140.KS": "Woori Financial Group", "028050.KS": "Samsung Engineering", "012450.KS": "Hanwha Aerospace"
 }
 
-PREFERRED_NEWS_SOURCES = [
-    ("moneycontrol.com", "Moneycontrol"),
-    ("screener.in", "Screener"),
-    ("groww.in", "Groww"),
-]
+class DummyOutput:
+    def write(self, x): pass
+    def flush(self): pass
 
-def _fetch_google_news_rss(encoded_query, max_items, timeout):
-    url = f"https://news.google.com/rss/search?q={encoded_query}&hl=en-IN&gl=IN&ceid=IN:en"
-    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-    with urllib.request.urlopen(req, timeout=timeout) as response:
-        raw_data = response.read()
 
-    root = ET.fromstring(raw_data)
-    items = root.findall('.//item')[:max_items]
-    parsed = []
-    for item in items:
-        title = item.findtext('title', default='')
-        pub_date = item.findtext('pubDate', default='')
-        if title:
-            parsed.append({'title': title, 'pubDate': pub_date})
-    return parsed
-
-def fetch_stock_news(query, max_items_per_source=3, timeout=8):
-    news_list = []
-    for domain, label in PREFERRED_NEWS_SOURCES:
+# =========================================================================
+# TICKER UNIVERSE FETCH 
+# =========================================================================
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_kospi200_tickers():
+    if not PYKRX_AVAILABLE:
+        return dict(FALLBACK_KOSPI200)
+        
+    old_stdout = sys.stdout
+    sys.stdout = DummyOutput()
+    
+    for i in range(1, 10):
+        safe_date = (datetime.today() - timedelta(days=i)).strftime("%Y%m%d")
         try:
-            encoded_query = urllib.parse.quote(f"{query} site:{domain}")
-            items = _fetch_google_news_rss(encoded_query, max_items_per_source, timeout)
-            for item in items: item['source'] = label
-            news_list.extend(items)
-        except Exception:
-            continue
-    if not news_list:
+            tickers = krx_stock.get_index_portfolio_deposit_file(safe_date, "1028")
+            if not tickers:
+                tickers = krx_stock.get_index_portfolio_deposit_file("1028", safe_date)
+            if tickers:
+                kospi_dict = {}
+                for t in tickers:
+                    try: kospi_dict[f"{t}.KS"] = krx_stock.get_market_ticker_name(t)
+                    except: kospi_dict[f"{t}.KS"] = f"Unknown ({t})"
+                if len(kospi_dict) > 50:
+                    sys.stdout = old_stdout
+                    return kospi_dict
+        except: pass
+            
+    for i in range(1, 5):
+        safe_date = (datetime.today() - timedelta(days=i)).strftime("%Y%m%d")
         try:
-            encoded_query = urllib.parse.quote(f"{query} stock NSE")
-            items = _fetch_google_news_rss(encoded_query, 5, timeout)
-            for item in items: item['source'] = "Google News"
-            news_list.extend(items)
-        except Exception:
+            tickers = krx_stock.get_market_ticker_list(safe_date, market="KOSPI")
+            if tickers:
+                kospi_dict = {}
+                for t in tickers[:100]:
+                    try: kospi_dict[f"{t}.KS"] = krx_stock.get_market_ticker_name(t)
+                    except: kospi_dict[f"{t}.KS"] = f"KOSPI Stock ({t})"
+                if len(kospi_dict) > 50:
+                    sys.stdout = old_stdout
+                    return kospi_dict
+        except: pass
+            
+    sys.stdout = old_stdout
+    return dict(FALLBACK_KOSPI200)
+
+
+# =========================================================================
+# PE RATIO CALCULATION ENGINE - ROBUST FALLBACK
+# =========================================================================
+def calculate_pe_ratio(ticker: str, info: dict, df: pd.DataFrame) -> str:
+    """
+    Calculate P/E ratio with multiple fallback methods.
+    
+    Priority:
+    1. trailingPE from yfinance
+    2. forwardPE from yfinance
+    3. Manual calculation: Price / EPS
+    4. Return "N/A" if all fail
+    """
+    
+    # Method 1: Try trailing P/E
+    trailing_pe = info.get("trailingPE")
+    if trailing_pe is not None and trailing_pe > 0:
+        try:
+            return f"{float(trailing_pe):.2f}"
+        except (ValueError, TypeError):
             pass
-    return news_list
+    
+    # Method 2: Try forward P/E
+    forward_pe = info.get("forwardPE")
+    if forward_pe is not None and forward_pe > 0:
+        try:
+            return f"{float(forward_pe):.2f}"
+        except (ValueError, TypeError):
+            pass
+    
+    # Method 3: Manual calculation (Price / EPS)
+    try:
+        price = info.get("currentPrice") or df["Close"].iloc[-1]
+        eps = info.get("trailingEps") or info.get("epsTrailingTwelveMonths")
+        
+        if price and eps and float(eps) != 0:
+            pe = float(price) / float(eps)
+            if pe > 0 and pe < 1000:  # Sanity check
+                return f"{pe:.2f}"
+    except (ValueError, TypeError, ZeroDivisionError):
+        pass
+    
+    # Method 4: Try dividend yield inversion (for financial stocks)
+    try:
+        dividend_yield = info.get("dividendYield")
+        if dividend_yield and float(dividend_yield) > 0:
+            # P/E ≈ Dividend Yield / Payout Ratio (rough estimate)
+            payout_ratio = info.get("payoutRatio", 0.5)
+            if payout_ratio > 0:
+                implied_pe = dividend_yield / payout_ratio
+                if 0 < implied_pe < 1000:
+                    return f"{implied_pe:.2f}"
+    except (ValueError, TypeError):
+        pass
+    
+    # All methods failed
+    return "N/A"
 
-# =========================================================
-# --- INDICATOR MATH ---
-# =========================================================
 
-def calculate_rsi(data, window=14):
-    delta = data.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
-    rs = gain / np.maximum(loss, 1e-8)
-    return 100 - (100 / (1 + rs))
-
-def calculate_roc(data, window=10):
-    return ((data - data.shift(window)) / data.shift(window)) * 100
-
-def calculate_stochastic(df, k_period=14, d_period=3):
-    low_min = df['Low'].rolling(window=k_period).min()
-    high_max = df['High'].rolling(window=k_period).max()
-    k = 100 * (df['Close'] - low_min) / np.maximum((high_max - low_min), 1e-8)
-    d = k.rolling(window=d_period).mean()
-    return k, d
-
-def calculate_williams_r(df, period=14):
-    high_max = df['High'].rolling(window=period).max()
-    low_min = df['Low'].rolling(window=period).min()
-    wr = -100 * (high_max - df['Close']) / np.maximum((high_max - low_min), 1e-8)
-    return wr
-
-def calculate_cci(df, period=20):
-    tp = (df['High'] + df['Low'] + df['Close']) / 3
-    sma = tp.rolling(window=period).mean()
-    mean_dev = tp.rolling(window=period).apply(lambda x: np.abs(x - x.mean()).mean(), raw=True)
-    cci = (tp - sma) / (0.015 * np.maximum(mean_dev, 1e-8))
-    return cci
-
-def calculate_atr(df, period=14):
-    high_low = df['High'] - df['Low']
-    high_close = (df['High'] - df['Close'].shift()).abs()
-    low_close = (df['Low'] - df['Close'].shift()).abs()
-    true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-    return true_range.rolling(window=period).mean()
-
-def calculate_adx(df, period=14):
-    up_move = df['High'].diff()
-    down_move = -df['Low'].diff()
-    plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
-    minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
-    atr = calculate_atr(df, period)
-    plus_di = 100 * pd.Series(plus_dm, index=df.index).rolling(window=period).mean() / np.maximum(atr, 1e-8)
-    minus_di = 100 * pd.Series(minus_dm, index=df.index).rolling(window=period).mean() / np.maximum(atr, 1e-8)
-    dx = 100 * (plus_di - minus_di).abs() / np.maximum((plus_di + minus_di), 1e-8)
-    return dx.rolling(window=period).mean()
-
-def calculate_obv(df):
-    direction = np.sign(df['Close'].diff()).fillna(0)
-    return (direction * df['Volume']).cumsum()
-
-def calculate_vwap(df, window=20):
-    typical_price = (df['High'] + df['Low'] + df['Close']) / 3
-    vol_sum = df['Volume'].rolling(window=window).sum()
-    return (typical_price * df['Volume']).rolling(window=window).sum() / np.maximum(vol_sum, 1e-8)
-
-def calculate_supertrend(df, period=10, multiplier=3):
-    atr = calculate_atr(df, period).values
-    high = df['High'].values
-    low = df['Low'].values
-    close = df['Close'].values
+# =========================================================================
+# ADVANCED INDICATORS MATHEMATICAL ENGINE
+# =========================================================================
+def calculate_supertrend(df, period=7, multiplier=3.0):
+    high, low, close = df["High"], df["Low"], df["Close"]
+    atr = ta.volatility.average_true_range(high, low, close, window=period)
     hl2 = (high + low) / 2
-
-    upperband = hl2 + (multiplier * atr)
-    lowerband = hl2 - (multiplier * atr)
-
-    supertrend = np.zeros(len(df))
-    direction = np.empty(len(df), dtype=object)
-
-    for i in range(len(df)):
-        if i == 0:
-            supertrend[i] = upperband[i]
-            direction[i] = "Sell"
-            continue
-
-        if close[i] > upperband[i - 1]:
-            direction[i] = "Buy"
-        elif close[i] < lowerband[i - 1]:
-            direction[i] = "Sell"
+    basic_upper = hl2 + multiplier * atr
+    basic_lower = hl2 - multiplier * atr
+    upper_band = basic_upper.copy()
+    lower_band = basic_lower.copy()
+    
+    for i in range(1, len(df)):
+        if basic_upper.iloc[i] < upper_band.iloc[i-1] or close.iloc[i-1] > upper_band.iloc[i-1]:
+            upper_band.iloc[i] = basic_upper.iloc[i]
+        else: upper_band.iloc[i] = upper_band.iloc[i-1]
+        if basic_lower.iloc[i] > lower_band.iloc[i-1] or close.iloc[i-1] < lower_band.iloc[i-1]:
+            lower_band.iloc[i] = basic_lower.iloc[i]
+        else: lower_band.iloc[i] = lower_band.iloc[i-1]
+            
+    supertrend = pd.Series(0.0, index=df.index)
+    direction = pd.Series(1, index=df.index)
+    for i in range(1, len(df)):
+        if direction.iloc[i-1] == 1:
+            if close.iloc[i] < lower_band.iloc[i]:
+                direction.iloc[i] = -1
+                supertrend.iloc[i] = upper_band.iloc[i]
+            else:
+                direction.iloc[i] = 1
+                supertrend.iloc[i] = lower_band.iloc[i]
         else:
-            direction[i] = direction[i - 1]
-            if direction[i] == "Buy" and lowerband[i] < lowerband[i - 1]:
-                lowerband[i] = lowerband[i - 1]
-            if direction[i] == "Sell" and upperband[i] > upperband[i - 1]:
-                upperband[i] = upperband[i - 1]
+            if close.iloc[i] > upper_band.iloc[i]:
+                direction.iloc[i] = 1
+                supertrend.iloc[i] = lower_band.iloc[i]
+            else:
+                direction.iloc[i] = -1
+                supertrend.iloc[i] = upper_band.iloc[i]
+    return supertrend, direction
 
-        supertrend[i] = lowerband[i] if direction[i] == "Buy" else upperband[i]
-
-    return pd.Series(supertrend, index=df.index), pd.Series(direction, index=df.index)
-
-# =========================================================
-# --- NEWS SENTIMENT ANALYZER ---
-# =========================================================
-
-POSITIVE_WORDS = ['surge', 'profit', 'jump', 'buy', 'growth', 'up', 'dividend', 'beat', 'high',
-                   'win', 'upgrade', 'bull', 'rally', 'record', 'outperform', 'soar', 'gain',
-                   'strong', 'expansion', 'boost']
-NEGATIVE_WORDS = ['fall', 'loss', 'drop', 'sell', 'decline', 'down', 'miss', 'low', 'penalty',
-                   'downgrade', 'crash', 'bear', 'plunge', 'weak', 'probe', 'fraud', 'lawsuit',
-                   'cut', 'slump', 'default']
-
-def analyze_sentiment(news_list):
-    if not news_list:
-        return {"label": "No News ⚪", "score": 0, "headline": "-", "source": "-", "count": 0}
-
-    scored_headlines = []
-    for item in news_list[:9]:
-        title = item.get('title', '')
-        if not title: continue
-        source = item.get('source', 'Google News')
-        text = title.lower()
-        pos = sum(1 for w in POSITIVE_WORDS if w in text)
-        neg = sum(1 for w in NEGATIVE_WORDS if w in text)
-        scored_headlines.append((title, pos - neg, pos, neg, source))
-
-    if not scored_headlines:
-        return {"label": "No News ⚪", "score": 0, "headline": "-", "source": "-", "count": 0}
-
-    total_pos = sum(h[2] for h in scored_headlines)
-    total_neg = sum(h[3] for h in scored_headlines)
-    net_score = total_pos - total_neg
-
-    trigger = max(scored_headlines, key=lambda h: abs(h[1]))
-    trigger_headline = trigger[0]
-    trigger_source = trigger[4]
-
-    if net_score > 0: label = "Positive 🟢"
-    elif net_score < 0: label = "Negative 🔴"
-    else: label = "Neutral ⚪"
-
+def compute_all_indicators(df: pd.DataFrame) -> dict:
+    """Compute short-term momentum indicators"""
+    close, high, low, volume = df["Close"], df["High"], df["Low"], df["Volume"]
+    sma50 = ta.trend.sma_indicator(close, window=50)
+    trend_verdict = "Bullish" if close.iloc[-1] > sma50.iloc[-1] else "Bearish"
+    rsi = ta.momentum.rsi(close, window=14).fillna(50)
+    macd_hist = ta.trend.MACD(close).macd_diff().fillna(0)
+    roc = ((close - close.shift(10)) / close.shift(10) * 100).fillna(0)
+    stoch = ta.momentum.stoch(high, low, close, window=14, smooth_window=3).fillna(50)
+    williams_r = ta.momentum.williams_r(high, low, close, lbp=14).fillna(-50)
+    cci = ta.trend.cci(high, low, close, window=20).fillna(0)
+    adx = ta.trend.adx(high, low, close, window=14).fillna(20)
+    atr = ta.volatility.average_true_range(high, low, close, window=14).fillna(0)
+    obv = ta.volume.on_balance_volume(close, volume).fillna(0)
+    tp = (high + low + close) / 3
+    vwap = (tp * volume).rolling(window=20).sum() / volume.rolling(window=20).sum()
+    vwap = vwap.fillna(close)
+    bb_high = ta.volatility.bollinger_hband(close, window=20, window_dev=2)
+    bb_low = ta.volatility.bollinger_lband(close, window=20, window_dev=2)
+    bb_verdict = "Inside Bands"
+    if close.iloc[-1] > bb_high.iloc[-1]: bb_verdict = "Overbought"
+    elif close.iloc[-1] < bb_low.iloc[-1]: bb_verdict = "Oversold"
+    _, st_dir = calculate_supertrend(df)
+    st_verdict = "BUY" if st_dir.iloc[-1] == 1 else "SELL"
+    high_52w = high.rolling(window=252, min_periods=1).max().iloc[-1]
+    low_52w = low.rolling(window=252, min_periods=1).min().iloc[-1]
     return {
-        "label": label,
-        "score": net_score,
-        "headline": trigger_headline,
-        "source": trigger_source,
-        "count": len(scored_headlines),
+        "price": close.iloc[-1], "trend": trend_verdict, "rsi": rsi.iloc[-1],
+        "macd_hist": macd_hist.iloc[-1], "roc": roc.iloc[-1], "stoch": stoch.iloc[-1],
+        "williams_r": williams_r.iloc[-1], "cci": cci.iloc[-1], "adx": adx.iloc[-1],
+        "atr": atr.iloc[-1], "obv": obv.iloc[-1], "vwap": vwap.iloc[-1],
+        "bollinger": bb_verdict, "supertrend": st_verdict, "volume": volume.iloc[-1],
+        "52w_high_pct": ((close.iloc[-1] - high_52w) / high_52w) * 100,
+        "52w_low_pct": ((close.iloc[-1] - low_52w) / low_52w) * 100
     }
 
-# =========================================================
-# --- MAIN SCANNER ---
-# =========================================================
-
-def process_ticker(ticker):
-    try:
-        stock = yf.Ticker(ticker)
-
-        try:
-            info = stock.info
-        except Exception:
-            info = {}
-
-        pe_ratio = info.get('trailingPE', info.get('forwardPE', "N/A"))
-        if isinstance(pe_ratio, (int, float)):
-            pe_ratio = round(pe_ratio, 2)
-
-        mkt_cap = info.get('marketCap', "N/A")
-        mkt_cap_str = f"₹{mkt_cap / 10000000:,.0f} Cr" if isinstance(mkt_cap, (int, float)) else "N/A"
-
-        df = stock.history(period="1y")
-        if len(df) == 0:
-            return None
-
-        df['MA50'] = df['Close'].rolling(window=50).mean()
-        df['MA200'] = df['Close'].rolling(window=200).mean()
-        df['RSI'] = calculate_rsi(df['Close'])
-        df['ROC10'] = calculate_roc(df['Close'], window=10)
-        df['StochK'], df['StochD'] = calculate_stochastic(df)
-        df['WilliamsR'] = calculate_williams_r(df)
-        df['CCI'] = calculate_cci(df)
-
-        exp1 = df['Close'].ewm(span=12, adjust=False).mean()
-        exp2 = df['Close'].ewm(span=26, adjust=False).mean()
-        df['MACD'] = exp1 - exp2
-        df['Signal_Line'] = df['MACD'].ewm(span=9, adjust=False).mean()
-
-        df['ATR'] = calculate_atr(df)
-        df['Vol_Avg_20'] = df['Volume'].rolling(window=20).mean()
-        df['BB_Mid'] = df['Close'].rolling(window=20).mean()
-        df['BB_Std'] = df['Close'].rolling(window=20).std()
-        df['BB_Upper'] = df['BB_Mid'] + (df['BB_Std'] * 2)
-        df['BB_Lower'] = df['BB_Mid'] - (df['BB_Std'] * 2)
-        df['ADX'] = calculate_adx(df)
-        df['OBV'] = calculate_obv(df)
-        df['OBV_MA20'] = df['OBV'].rolling(window=20).mean()
-        df['VWAP20'] = calculate_vwap(df, window=20)
-        df['Supertrend'], df['Supertrend_Dir'] = calculate_supertrend(df)
-
-        last_close = float(df['Close'].iloc[-1])
-        bb_upper = float(df['BB_Upper'].iloc[-1])
-        bb_lower = float(df['BB_Lower'].iloc[-1])
-        high_52w = float(df['High'].max())
-        low_52w = float(df['Low'].min())
-        pct_from_high = ((last_close - high_52w) / high_52w) * 100
-        pct_from_low = ((last_close - low_52w) / low_52w) * 100
-
-        # Earnings Date Logic
-        earnings_date = "N/A"
-        days_to_earnings = None
-        earnings_flag = "-"
-        try:
-            calendar = stock.calendar
-            if calendar:
-                dates = calendar.get('Earnings Date', []) if isinstance(calendar, dict) else (calendar['Earnings Date'] if 'Earnings Date' in calendar else [])
-                if len(dates) > 0:
-                    ed = pd.to_datetime(dates[0])
-                    if ed.tzinfo is not None:
-                        ed = ed.tz_localize(None)
-                    earnings_date = ed.strftime('%Y-%m-%d')
-                    days_to_earnings = (ed.normalize() - pd.Timestamp.now().normalize()).days
-                    if days_to_earnings is not None:
-                        if 0 <= days_to_earnings <= 7: earnings_flag = f"⚠️ In {days_to_earnings}d"
-                        elif 8 <= days_to_earnings <= 21: earnings_flag = f"Upcoming in {days_to_earnings}d"
-                        elif days_to_earnings < 0: earnings_flag = "Recently Reported"
-                        else: earnings_flag = f"In {days_to_earnings}d"
-        except Exception:
-            pass
-
-        try:
-            search_name = TICKER_TO_SEARCH_NAME.get(ticker, ticker.replace(".NS", ""))
-            news_items = fetch_stock_news(search_name)
-            sentiment_info = analyze_sentiment(news_items)
-        except Exception:
-            sentiment_info = {"label": "Fetch Error", "score": 0, "headline": "-", "source": "-", "count": 0}
-
-        trend = "Bullish 🟢" if float(df['MA50'].iloc[-1]) > float(df['MA200'].iloc[-1]) else "Bearish 🔴"
-        macd_signal = "Bull 🟢" if float(df['MACD'].iloc[-1]) > float(df['Signal_Line'].iloc[-1]) else "Bear 🔴"
-        vol_signal = "High 🚀" if float(df['Volume'].iloc[-1]) > (float(df['Vol_Avg_20'].iloc[-1]) * 1.5) else "Normal"
-
-        latest_rsi = float(df['RSI'].iloc[-1])
-        rsi_signal = "Oversold" if latest_rsi < 30 else ("Overbought" if latest_rsi > 70 else "Neutral")
-        bb_signal = "Breaking Upper Band 🔥" if last_close > bb_upper else ("Below Lower Band 🧊" if last_close < bb_lower else "Inside Bands")
-        latest_roc = float(df['ROC10'].iloc[-1])
-        roc_signal = "Accelerating 🚀" if latest_roc > 3 else ("Decelerating 🐢" if latest_roc < -3 else "Flat")
-        
-        latest_stoch_k = float(df['StochK'].iloc[-1])
-        stoch_signal = "Overbought" if latest_stoch_k > 80 else ("Oversold" if latest_stoch_k < 20 else "Neutral")
-        
-        latest_wr = float(df['WilliamsR'].iloc[-1])
-        wr_signal = "Overbought" if latest_wr > -20 else ("Oversold" if latest_wr < -80 else "Neutral")
-        
-        latest_cci = float(df['CCI'].iloc[-1])
-        cci_signal = "Overbought" if latest_cci > 100 else ("Oversold" if latest_cci < -100 else "Neutral")
-        
-        latest_adx = float(df['ADX'].iloc[-1])
-        adx_signal = "Strong Trend 💪" if latest_adx > 25 else "Weak/No Trend"
-        obv_signal = "Rising 📈" if float(df['OBV'].iloc[-1]) > float(df['OBV_MA20'].iloc[-1]) else "Falling 📉"
-        latest_vwap = float(df['VWAP20'].iloc[-1])
-        vwap_signal = "Above VWAP 🟢" if last_close > latest_vwap else "Below VWAP 🔴"
-        supertrend_signal = "Buy 🟢" if df['Supertrend_Dir'].iloc[-1] == "Buy" else "Sell 🔴"
-
-        # Math Scoring Engine
-        score = 0
-        score += 1 if trend.startswith("Bullish") else -1
-        score += 1 if macd_signal.startswith("Bull") else -1
-        score += 1 if latest_roc > 0 else -1
-        score += 1 if latest_stoch_k > 50 else -1
-        score += 1 if latest_wr > -50 else -1
-        score += 1 if latest_cci > 0 else -1
-        score += 1 if obv_signal.startswith("Rising") else -1
-        score += 1 if vwap_signal.startswith("Above") else -1
-        score += 1 if supertrend_signal.startswith("Buy") else -1
-        
-        if latest_adx > 25: score = score * 1.2
-        sentiment_nudge = max(-1, min(1, sentiment_info["score"]))
-        score += sentiment_nudge
-
-        momentum_score = round(score, 1)
-        if momentum_score >= 5: momentum_label = "Strong Bullish 🚀"
-        elif momentum_score >= 1: momentum_label = "Mild Bullish 🟢"
-        elif momentum_score <= -5: momentum_label = "Strong Bearish 🔻"
-        elif momentum_score <= -1: momentum_label = "Mild Bearish 🔴"
-        else: momentum_label = "Neutral ⚪"
-
-        # Base Recommendation
-        if momentum_score >= 3: recommendation = "BUY 🟢"
-        elif momentum_score <= -3: recommendation = "SELL 🔴"
-        else: recommendation = "HOLD ⚪"
-
-        overbought_count = sum([rsi_signal == "Overbought", stoch_signal == "Overbought", cci_signal == "Overbought"])
-        oversold_count = sum([rsi_signal == "Oversold", stoch_signal == "Oversold", cci_signal == "Oversold"])
-
-        if recommendation == "BUY 🟢" and overbought_count >= 2:
-            recommendation = "BUY ⚠️ (Overbought)"
-        elif recommendation == "SELL 🔴" and oversold_count >= 2:
-            recommendation = "SELL ⚠️ (Oversold)"
-
-        # --- NEW: ABSOLUTE CONVICTION VERDICT ---
-        earnings_risk = "⚠️" in earnings_flag
-        news_score = sentiment_info['score']
-        high_vol = vol_signal.startswith("High")
-
-        if earnings_risk:
-            absolute_verdict = "HOLD ⚠️ (Earnings Risk)"
-        elif momentum_score >= 4 and news_score > 0 and high_vol:
-            absolute_verdict = "STRONG BUY 🌟"
-        elif momentum_score <= -4 and news_score < 0 and high_vol:
-            absolute_verdict = "STRONG SELL 💥"
-        elif momentum_score >= 3 and news_score < 0:
-            absolute_verdict = "HOLD ⚖️ (Bad News)"
-        elif momentum_score <= -3 and news_score > 0:
-            absolute_verdict = "HOLD ⚖️ (Good News)"
-        elif recommendation.startswith("BUY"):
-            absolute_verdict = "BUY 🟢"
-        elif recommendation.startswith("SELL"):
-            absolute_verdict = "SELL 🔴"
-        else:
-            absolute_verdict = "HOLD ⚪"
-
-        return {
-            "Stock": ticker.replace(".NS", ""),
-            "Absolute Verdict": absolute_verdict,
-            "Recommendation": recommendation,
-            "Momentum": momentum_label,
-            "Momentum Score": momentum_score,
-            "Trend (MA)": trend,
-            "Price (₹)": round(last_close, 2),
-            "Market Cap": mkt_cap_str,
-            "P/E Ratio": pe_ratio,
-            "News Sentiment": f"{sentiment_info['label']} ({sentiment_info['score']:+d})" if sentiment_info['score'] != 0 or sentiment_info['label'] != 'No News ⚪' else sentiment_info['label'],
-            "Sentiment Trigger Headline": sentiment_info["headline"],
-            "News Source": sentiment_info["source"],
-            "Next Earnings": earnings_date,
-            "Earnings Watch": earnings_flag,
-            "MACD": macd_signal,
-            "RSI": rsi_signal,
-            "ROC(10d)": f"{latest_roc:.1f}% ({roc_signal})",
-            "Stochastic": f"{latest_stoch_k:.0f} ({stoch_signal})",
-            "Williams %R": f"{latest_wr:.0f} ({wr_signal})",
-            "CCI": f"{latest_cci:.0f} ({cci_signal})",
-            "ADX": f"{latest_adx:.0f} ({adx_signal})",
-            "OBV": obv_signal,
-            "VWAP(20d)": vwap_signal,
-            "Supertrend": supertrend_signal,
-            "Bollinger": bb_signal,
-            "ATR": round(float(df['ATR'].iloc[-1]), 2),
-            "52W High %": f"{pct_from_high:.1f}%",
-            "52W Low %": f"{pct_from_low:.1f}%",
-            "Volume": vol_signal,
-        }
-    except Exception:
-        return None
-
-@st.cache_data(ttl=900, show_spinner=False)
-def fetch_and_analyze(tickers):
-    results = []
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = [executor.submit(process_ticker, t) for t in tickers]
-        for future in as_completed(futures):
-            row = future.result()
-            if row: results.append(row)
-    return pd.DataFrame(results)
-
-# =========================================================
-# --- BACKTESTING ENGINE ---
-# =========================================================
-
-BACKTEST_HORIZONS = (5, 10, 20)
-
-def compute_vectorized_signals(df):
-    d = df.copy()
-    d['MA50'] = d['Close'].rolling(window=50).mean()
-    d['MA200'] = d['Close'].rolling(window=200).mean()
-    d['RSI'] = calculate_rsi(d['Close'])
-    d['ROC10'] = calculate_roc(d['Close'], window=10)
-    d['StochK'], d['StochD'] = calculate_stochastic(d)
-    d['WilliamsR'] = calculate_williams_r(d)
-    d['CCI'] = calculate_cci(d)
-
-    exp1 = d['Close'].ewm(span=12, adjust=False).mean()
-    exp2 = d['Close'].ewm(span=26, adjust=False).mean()
-    d['MACD'] = exp1 - exp2
-    d['Signal_Line'] = d['MACD'].ewm(span=9, adjust=False).mean()
-
-    d['ATR'] = calculate_atr(d)
-    d['ADX'] = calculate_adx(d)
-    d['OBV'] = calculate_obv(d)
-    d['OBV_MA20'] = d['OBV'].rolling(window=20).mean()
-    d['VWAP20'] = calculate_vwap(d, window=20)
-    d['Supertrend'], d['Supertrend_Dir'] = calculate_supertrend(d)
-
-    warmup_cols = ['MA200', 'RSI', 'StochK', 'WilliamsR', 'CCI', 'MACD', 'ADX', 'OBV_MA20', 'VWAP20']
-    valid_mask = d[warmup_cols].notna().all(axis=1)
-
-    trend_bull = d['MA50'] > d['MA200']
-    macd_bull = d['MACD'] > d['Signal_Line']
-    roc_pos = d['ROC10'] > 0
-    stoch_bull = d['StochK'] > 50
-    wr_bull = d['WilliamsR'] > -50
-    cci_bull = d['CCI'] > 0
-    obv_rising = d['OBV'] > d['OBV_MA20']
-    vwap_above = d['Close'] > d['VWAP20']
-    supertrend_buy = d['Supertrend_Dir'] == 'Buy'
-
-    score = (
-        (trend_bull.astype(int) * 2 - 1) + (macd_bull.astype(int) * 2 - 1) +
-        (roc_pos.astype(int) * 2 - 1) + (stoch_bull.astype(int) * 2 - 1) +
-        (wr_bull.astype(int) * 2 - 1) + (cci_bull.astype(int) * 2 - 1) +
-        (obv_rising.astype(int) * 2 - 1) + (vwap_above.astype(int) * 2 - 1) +
-        (supertrend_buy.astype(int) * 2 - 1)
-    )
-    strong_trend = d['ADX'] > 25
-    score = np.where(strong_trend, score * 1.2, score)
-    d['Momentum_Score_Hist'] = np.where(valid_mask, np.round(score, 1), np.nan)
-
-    conditions = [
-        d['Momentum_Score_Hist'] >= 5, d['Momentum_Score_Hist'] >= 1,
-        d['Momentum_Score_Hist'] <= -5, d['Momentum_Score_Hist'] <= -1,
-    ]
-    choices = ['Strong Bullish 🚀', 'Mild Bullish 🟢', 'Strong Bearish 🔻', 'Mild Bearish 🔴']
-    d['Momentum_Label_Hist'] = pd.Series(np.select(conditions, choices, default='Neutral ⚪'), index=d.index).astype(object)
-    d.loc[~valid_mask, 'Momentum_Label_Hist'] = np.nan
-
-    rsi_overbought, rsi_oversold = d['RSI'] > 70, d['RSI'] < 30
-    stoch_overbought, stoch_oversold = d['StochK'] > 80, d['StochK'] < 20
-    cci_overbought, cci_oversold = d['CCI'] > 100, d['CCI'] < -100
-    overbought_count = rsi_overbought.astype(int) + stoch_overbought.astype(int) + cci_overbought.astype(int)
-    oversold_count = rsi_oversold.astype(int) + stoch_oversold.astype(int) + cci_oversold.astype(int)
-
-    base_reco = np.where(d['Momentum_Score_Hist'] >= 3, 'BUY', np.where(d['Momentum_Score_Hist'] <= -3, 'SELL', 'HOLD'))
-    reco = np.where((base_reco == 'BUY') & (overbought_count >= 2), 'BUY ⚠️ (Overbought)',
-            np.where((base_reco == 'SELL') & (oversold_count >= 2), 'SELL ⚠️ (Oversold)',
-             np.where(base_reco == 'BUY', 'BUY 🟢', np.where(base_reco == 'SELL', 'SELL 🔴', 'HOLD ⚪'))))
+def compute_long_term_indicators(df: pd.DataFrame) -> dict:
+    """Compute long-term trend indicators (200-day MA, annual momentum)"""
+    close = df["Close"]
     
-    d['Recommendation_Hist'] = pd.Series(reco, index=d.index).astype(object)
-    d.loc[~valid_mask, 'Recommendation_Hist'] = np.nan
+    # Long-term moving average
+    sma200 = ta.trend.sma_indicator(close, window=200)
+    long_term_trend = "Bullish" if close.iloc[-1] > sma200.iloc[-1] else "Bearish"
+    
+    # Annual momentum (1-year return)
+    annual_return = ((close.iloc[-1] - close.iloc[0]) / close.iloc[0]) * 100
+    
+    # Support/Resistance (52-week range midpoint)
+    high_52w = close.rolling(window=252, min_periods=1).max().iloc[-1]
+    low_52w = close.rolling(window=252, min_periods=1).min().iloc[-1]
+    support = low_52w
+    resistance = high_52w
+    distance_to_support = ((close.iloc[-1] - support) / support) * 100
+    
+    # 3-Year trend (if available)
+    if len(df) >= 756:  # 3 years of data
+        sma_3y = ta.trend.sma_indicator(close, window=756)
+        trend_3y = "Bullish" if close.iloc[-1] > sma_3y.iloc[-1] else "Bearish"
+        return_3y = ((close.iloc[-1] - close.iloc[-756]) / close.iloc[-756]) * 100 if len(close) >= 756 else annual_return
+    else:
+        trend_3y = long_term_trend
+        return_3y = annual_return
+    
+    return {
+        "sma200": sma200.iloc[-1],
+        "long_term_trend": long_term_trend,
+        "annual_return": annual_return,
+        "support": support,
+        "resistance": resistance,
+        "distance_to_support": distance_to_support,
+        "trend_3y": trend_3y,
+        "return_3y": return_3y
+    }
 
-    return d
 
-def add_forward_returns(d, horizons=BACKTEST_HORIZONS):
-    for h in horizons: d[f'Fwd_Return_{h}d'] = d['Close'].shift(-h) / d['Close'] - 1
-    return d
-
-def backtest_ticker(ticker, years):
+# =========================================================================
+# NEWS SENTIMENT & SCORING MATRICES
+# =========================================================================
+@st.cache_data(ttl=1800, show_spinner=False)
+def get_google_news(company_name: str):
+    url = f"https://news.google.com/rss/search?q={quote(f'{company_name} 주가')}&hl=ko&gl=KR&ceid=KR:ko"
     try:
-        stock = yf.Ticker(ticker)
-        df = stock.history(period=f"{years}y")
-        if len(df) < 250: return None
-        d = compute_vectorized_signals(df)
-        d = add_forward_returns(d)
-        d = d.dropna(subset=['Momentum_Score_Hist'])
-        if d.empty: return None
-        d['Stock'] = ticker.replace(".NS", "")
-        cols = ['Stock', 'Momentum_Label_Hist', 'Recommendation_Hist'] + [f'Fwd_Return_{h}d' for h in BACKTEST_HORIZONS]
-        return d[cols]
-    except Exception:
+        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=5)
+        item = ET.fromstring(resp.content).find(".//item")
+        if item is not None: return item.findtext("title"), item.findtext("link"), "Google News KR"
+    except: pass
+    return "No recent headline found", "#", "N/A"
+
+def process_scoring(ind: dict, long_term: dict):
+    """
+    Generate short-term, long-term, and ultra long-term recommendations.
+    """
+    # ========== SHORT-TERM MOMENTUM SCORE ==========
+    score = 50.0
+    if ind["rsi"] < 30: score += 15
+    elif ind["rsi"] > 70: score -= 15
+    if ind["macd_hist"] > 0: score += 10
+    else: score -= 5
+    if ind["supertrend"] == "BUY": score += 10
+    else: score -= 10
+    if ind["cci"] > 100: score += 5
+    elif ind["cci"] < -100: score -= 5
+    
+    score = max(0.0, min(100.0, score))
+    rec = "HOLD"
+    if score >= 65: rec = "BUY"
+    elif score <= 35: rec = "SELL"
+    
+    # ========== LONG-TERM (1-YEAR) STRATEGIC SCORE ==========
+    lt_score = 50.0
+    if long_term["long_term_trend"] == "Bullish": lt_score += 25
+    else: lt_score -= 20
+    
+    if long_term["annual_return"] > 15: lt_score += 15
+    elif long_term["annual_return"] < -10: lt_score -= 15
+    
+    if long_term["distance_to_support"] < 5:  # Close to support
+        lt_score += 20
+    
+    lt_score = max(0.0, min(100.0, lt_score))
+    lt_rec = "HOLD"
+    if lt_score >= 65: lt_rec = "BUY"
+    elif lt_score <= 35: lt_rec = "SELL"
+    
+    # ========== ULTRA LONG-TERM (3-YEAR) STRATEGIC SCORE ==========
+    ult_score = 50.0
+    if long_term["trend_3y"] == "Bullish": ult_score += 35  # Higher weight for long-term
+    else: ult_score -= 25
+    
+    if long_term["return_3y"] > 30: ult_score += 25
+    elif long_term["return_3y"] > 10: ult_score += 15
+    elif long_term["return_3y"] < -20: ult_score -= 25
+    
+    # Valuation check - favor cheaper prices in long-term
+    if long_term["distance_to_support"] < 10:
+        ult_score += 15
+    elif long_term["distance_to_support"] > 20:
+        ult_score -= 10
+    
+    ult_score = max(0.0, min(100.0, ult_score))
+    ult_rec = "HOLD"
+    if ult_score >= 65: ult_rec = "BUY"
+    elif ult_score <= 35: ult_rec = "SELL"
+    
+    # ========== COMBINED VERDICT LOGIC ==========
+    # Ultra Long-Term BUY signal (for wealth building)
+    if ult_rec == "BUY" and (rec == "SELL" or lt_rec == "SELL"):
+        combined_verdict = "💎 ACCUMULATE (3Y Bullish)"
+        absolute_rec = "BUY (Long-term Hold)"
+    elif ult_rec == "BUY" and lt_rec == "BUY" and rec == "BUY":
+        combined_verdict = "🚀 STRONG BUY (All Signals)"
+        absolute_rec = "BUY (All Timeframes)"
+    elif rec == "SELL" and lt_rec == "BUY" and ult_rec == "BUY":
+        combined_verdict = "🔄 BUY on Dips (LT+ULT Bullish)"
+        absolute_rec = "BUY (On Pullback)"
+    elif rec == "BUY" and lt_rec == "SELL" and ult_rec == "BUY":
+        combined_verdict = "⚠️ CAUTIOUS BUY (ULT Bullish)"
+        absolute_rec = "HOLD (Take Profits)"
+    elif ult_rec == "SELL":
+        combined_verdict = "🔴 AVOID (ULT Bearish)"
+        absolute_rec = "SELL (Downtrend)"
+    else:
+        combined_verdict = f"→ {rec}"
+        absolute_rec = rec
+    
+    return {
+        "short_term_score": round(score, 1),
+        "short_term_rec": rec,
+        "long_term_score": round(lt_score, 1),
+        "long_term_rec": lt_rec,
+        "ultra_long_term_score": round(ult_score, 1),
+        "ultra_long_term_rec": ult_rec,
+        "combined_verdict": combined_verdict,
+        "absolute_rec": absolute_rec
+    }
+
+
+# =========================================================================
+# WORKER ENGINES
+# =========================================================================
+def scan_single_ticker(ticker: str, name: str):
+    try:
+        # Fetch data
+        ticker_obj = yf.Ticker(ticker)
+        df = ticker_obj.history(period="3y")  # Changed to 3 years for better long-term analysis
+        
+        # FIX: Scrub out any "ghost rows" with NaNs that Yahoo Finance sometimes attaches
+        df = df.dropna(subset=["Close", "High", "Low", "Volume"])
+        
+        if df.empty or len(df) < 50: return None
+        
+        # Get info with error handling
+        try:
+            info = ticker_obj.info
+            if info is None:
+                info = {}
+        except:
+            info = {}
+        
+        # Calculate P/E with robust fallback
+        pe_formatted = calculate_pe_ratio(ticker, info, df)
+        
+        # Get market cap safely
+        mcap = info.get("marketCap")
+        if mcap is None or pd.isna(mcap):
+            mcap = "N/A"
+        else:
+            try:
+                mcap = f"{int(mcap):,}"
+            except:
+                mcap = "N/A"
+        
+        # COMPUTE BOTH SHORT AND LONG TERM INDICATORS
+        latest = compute_all_indicators(df)
+        long_term = compute_long_term_indicators(df)
+        
+        headline, link, source = get_google_news(name)
+        
+        # GET ENHANCED SCORING
+        scoring = process_scoring(latest, long_term)
+        
+        price_val = latest["price"]
+        price_display = f"₩{price_val:,.0f}" if not pd.isna(price_val) else "N/A"
+        
+        return {
+            "Stock": f"{name} ({ticker})", 
+            "ST Score": scoring["short_term_score"],
+            "ST Rec": scoring["short_term_rec"],
+            "LT Score": scoring["long_term_score"],
+            "LT Rec": scoring["long_term_rec"],
+            "ULT Score": scoring["ultra_long_term_score"],
+            "ULT Rec": scoring["ultra_long_term_rec"],
+            "Combined Strategy": scoring["combined_verdict"],
+            "Action": scoring["absolute_rec"],
+            "Current Price": price_display,
+            "LT Trend": long_term["long_term_trend"],
+            "3Y Trend": long_term["trend_3y"],
+            "Annual Return": f"{long_term['annual_return']:.1f}%",
+            "3-Year Return": f"{long_term['return_3y']:.1f}%",
+            "Support Level": f"₩{long_term['support']:,.0f}",
+            "Resistance": f"₩{long_term['resistance']:,.0f}",
+            "Distance to Support": f"{long_term['distance_to_support']:.1f}%",
+            "Trend (MA)": latest["trend"], 
+            "Market Cap": mcap, 
+            "P/E Ratio": pe_formatted,
+            "Sentiment": "Neutral",
+            "Headline": headline, 
+            "Source": source,
+            "Supertrend": latest["supertrend"], 
+            "MACD": round(latest["macd_hist"], 2), 
+            "RSI": round(latest["rsi"], 1), 
+            "ROC(10d)": round(latest["roc"], 2),
+            "Stochastic": round(latest["stoch"], 1), 
+            "Williams %R": round(latest["williams_r"], 1), 
+            "CCI": round(latest["cci"], 1),
+            "ADX": round(latest["adx"], 1), 
+            "OBV": f"{latest['obv']:,.0f}", 
+            "VWAP(20d)": round(latest["vwap"], 0),
+            "Bollinger": latest["bollinger"], 
+            "ATR": round(latest["atr"], 0),
+            "52W High %": round(latest["52w_high_pct"], 2), 
+            "52W Low %": round(latest["52w_low_pct"], 2), 
+            "Volume": f"{latest['volume']:,.0f}"
+        }
+    except Exception as e:
+        print(f"Error processing {ticker}: {str(e)}")
         return None
 
-@st.cache_data(ttl=86400, show_spinner=False)
-def run_backtest_all(tickers, years):
-    frames = []
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = [executor.submit(backtest_ticker, t, years) for t in tickers]
-        for future in as_completed(futures):
+def run_parallel_scan(tickers_dict: dict, max_workers: int = 8, progress_callback=None):
+    results = []
+    total = len(tickers_dict)
+    done = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(scan_single_ticker, t, n): (t, n) for t, n in tickers_dict.items()}
+        for future in concurrent.futures.as_completed(futures):
+            done += 1
+            if progress_callback: progress_callback(done, total)
             res = future.result()
-            if res is not None and not res.empty: frames.append(res)
-    if not frames: return pd.DataFrame()
-    return pd.concat(frames, ignore_index=True)
+            if res: results.append(res)
+    return results
 
-def summarize_backtest(combined, group_col, horizons=BACKTEST_HORIZONS):
-    rows = []
-    for label, group in combined.groupby(group_col):
-        row = {group_col: label, 'Occurrences': len(group)}
-        for h in horizons:
-            valid = group[f'Fwd_Return_{h}d'].dropna()
-            if len(valid) > 0:
-                row[f'Win Rate {h}d'] = f"{(valid > 0).mean() * 100:.0f}%"
-                row[f'Avg Return {h}d'] = f"{valid.mean() * 100:+.2f}%"
-            else:
-                row[f'Win Rate {h}d'] = "-"
-                row[f'Avg Return {h}d'] = "-"
-        rows.append(row)
 
-    summary_df = pd.DataFrame(rows)
-    baseline_row = {group_col: 'ALL DAYS (Baseline)', 'Occurrences': len(combined)}
-    for h in horizons:
-        valid = combined[f'Fwd_Return_{h}d'].dropna()
-        baseline_row[f'Win Rate {h}d'] = f"{(valid > 0).mean() * 100:.0f}%"
-        baseline_row[f'Avg Return {h}d'] = f"{valid.mean() * 100:+.2f}%"
+# =========================================================================
+# COLOR STYLING FUNCTION
+# =========================================================================
+def highlight_dual_recommendation(val):
+    """Color code both short-term and long-term recommendations"""
+    if isinstance(val, str):
+        if "STRONG BUY" in val or "ACCUMULATE" in val:
+            return 'background-color: #1e5631; color: #ffffff; font-weight: bold;'
+        elif "BUY on Dips" in val or "CAUTIOUS" in val:
+            return 'background-color: #cce5ff; color: #004085; font-weight: bold;'
+        elif ("BUY" in val.upper() or "Long-term Hold" in val) and "REC" not in val:
+            return 'background-color: #d4edda; color: #155724; font-weight: bold;'
+        elif "AVOID" in val or "DOWNTREND" in val:
+            return 'background-color: #8b0000; color: #ffffff; font-weight: bold;'
+        elif "SELL" in val.upper():
+            return 'background-color: #f8d7da; color: #721c24; font-weight: bold;'
+        elif "HOLD" in val.upper() or "TAKE PROFITS" in val:
+            return 'background-color: #fff3cd; color: #856404; font-weight: bold;'
+    return ''
 
-    summary_df = pd.concat([summary_df, pd.DataFrame([baseline_row])], ignore_index=True)
-    return summary_df
 
-if st.button("🚀 Run Ultimate Scan"):
-    with st.spinner('Downloading charts, fundamentals, momentum, and news data...'):
-        analysis_df = fetch_and_analyze(tuple(nifty_tickers))
+# =========================================================================
+# APPLICATION UI
+# =========================================================================
+def main():
+    st.set_page_config(page_title="KOSPI 200 Advanced Momentum Screener", layout="wide")
+    st.title("🇰🇷 KOSPI 200 Tri-Timeframe Momentum Screener")
+    st.caption("Advanced technical analysis with SHORT-TERM momentum, LONG-TERM trends & ULTRA LONG-TERM (3Y) accumulation signals.")
 
-        if analysis_df.empty:
-            st.error("Failed to download data.")
-            st.session_state.pop("analysis_df", None)
-        else:
-            analysis_df = analysis_df.sort_values(by="Momentum Score", ascending=False).reset_index(drop=True)
+    tickers_all = get_kospi200_tickers()
+    
+    with st.sidebar:
+        st.header("⚙️ Scanning Framework")
+        subset_n = st.slider("Universe Depth Scan Size", 5, len(tickers_all), min(38, len(tickers_all)))
+        max_workers = st.slider("Parallel Threads Execution", 2, 16, 8)
+        
+        run_btn = st.button("🔍 Initialize Deep Stock Scanning Engine", type="primary", use_container_width=True)
 
-            if "backtest_combined" in st.session_state:
-                reco_summary = summarize_backtest(st.session_state["backtest_combined"], "Recommendation_Hist")
-                win_map = dict(zip(reco_summary["Recommendation_Hist"], reco_summary["Win Rate 10d"]))
-                ret_map = dict(zip(reco_summary["Recommendation_Hist"], reco_summary["Avg Return 10d"]))
-                occ_map = dict(zip(reco_summary["Recommendation_Hist"], reco_summary["Occurrences"]))
-                analysis_df["Hist. Win Rate (10d)"] = analysis_df["Recommendation"].map(win_map).fillna("-")
-                analysis_df["Hist. Avg Return (10d)"] = analysis_df["Recommendation"].map(ret_map).fillna("-")
-                analysis_df["Hist. Occurrences"] = analysis_df["Recommendation"].map(occ_map).fillna(0).astype(int)
+    if "scan_data" not in st.session_state:
+        st.session_state["scan_data"] = None
 
-                cols = list(analysis_df.columns)
-                for c in ["Hist. Win Rate (10d)", "Hist. Avg Return (10d)", "Hist. Occurrences"]:
-                    cols.remove(c)
-                # Insert the historical data directly after the new Absolute Verdict column
-                insert_at = cols.index("Absolute Verdict") + 1
-                for i, c in enumerate(["Hist. Win Rate (10d)", "Hist. Avg Return (10d)", "Hist. Occurrences"]):
-                    cols.insert(insert_at + i, c)
-                analysis_df = analysis_df[cols]
+    if run_btn:
+        subset = dict(list(tickers_all.items())[:subset_n])
+        progress = st.progress(0.0, text="Initializing scan...")
+        def _cb(d, t): progress.progress(d / t, text=f"Scanned {d}/{t} tickers...")
+        
+        with st.spinner("Processing tri-timeframe matrix transformations..."):
+            results = run_parallel_scan(subset, max_workers=max_workers, progress_callback=_cb)
+        progress.empty()
+        st.session_state["scan_data"] = results
 
-            st.session_state["analysis_df"] = analysis_df
-            st.session_state["scan_time"] = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-if "analysis_df" in st.session_state:
-    st.success("Scan Complete!")
-    st.dataframe(st.session_state["analysis_df"], width="stretch")
-
-    excel_buffer = io.BytesIO()
-    with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
-        st.session_state["analysis_df"].to_excel(writer, index=False, sheet_name="Nifty50_Screener")
-    excel_buffer.seek(0)
-
-    st.download_button(
-        label="📥 Download as Excel",
-        data=excel_buffer,
-        file_name=f"nifty50_screener_{st.session_state['scan_time']}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-
-st.markdown("---")
-st.subheader("📊 Historical Signal Backtest")
-st.caption(
-    "Tests whether the Momentum/Recommendation signals above have actually preceded "
-    "positive returns in the past, pooled across all 50 stocks. Excludes news sentiment "
-    "(no historical headline archive available) - this validates the technical signal "
-    "logic only, not any individual stock's fundamentals or news."
-)
-
-backtest_years = st.slider("Years of history to test", min_value=2, max_value=10, value=5)
-
-if st.button("🔬 Run Backtest"):
-    with st.spinner(f"Backtesting {len(nifty_tickers)} stocks over {backtest_years} years of history..."):
-        combined = run_backtest_all(tuple(nifty_tickers), backtest_years)
-        if combined.empty:
-            st.error("Backtest failed - no historical data retrieved.")
-        else:
-            st.session_state["backtest_combined"] = combined
-            st.session_state["backtest_years"] = backtest_years
-
-if "backtest_combined" in st.session_state:
-    combined = st.session_state["backtest_combined"]
-    st.success(
-        f"Backtested {combined['Stock'].nunique()} stocks across {len(combined):,} "
-        f"trading days over {st.session_state['backtest_years']} years."
-    )
-
-    st.write("**By Recommendation Signal**")
-    reco_summary = summarize_backtest(combined, "Recommendation_Hist")
-    st.dataframe(reco_summary, width="stretch")
-
-    st.write("**By Momentum Label**")
-    momentum_summary = summarize_backtest(combined, "Momentum_Label_Hist")
-    st.dataframe(momentum_summary, width="stretch")
+    data = st.session_state["scan_data"]
+    if data:
+        df = pd.DataFrame(data)
+        st.subheader("📊 Dynamic Tri-Timeframe Screening Output Grid")
+        
+        # Reorganize columns for better visibility
+        primary_cols = ["Stock", "ST Score", "ST Rec", "LT Score", "LT Rec", "ULT Score", "ULT Rec", 
+                       "Combined Strategy", "Action", "Current Price"]
+        secondary_cols = [col for col in df.columns if col not in primary_cols]
+        
+        df_display = df[primary_cols + secondary_cols]
+        
+        # Apply the color styling to the specific columns before displaying
+        styled_df = df_display.style.map(
+            highlight_dual_recommendation, 
+            subset=['ST Rec', 'LT Rec', 'ULT Rec', 'Combined Strategy', 'Action']
+        )
+        
+        st.dataframe(styled_df, use_container_width=True, hide_index=True)
+        
+        # Key Information Box
+        st.divider()
+        st.subheader("📌 Legend & Strategy Explanation")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.success("🟢 **BUY** - ST momentum positive")
+        with col2:
+            st.info("🔄 **BUY on Dips** - ST weak, LT+ULT bullish")
+        with col3:
+            st.warning("💎 **ACCUMULATE** - ULT bullish, building position")
+        with col4:
+            st.error("🔴 **AVOID** - ULT bearish, stay out")
+        
+        # Show actionable strategies
+        st.divider()
+        st.subheader("📈 Strategy Analysis")
+        
+        accumulate_stocks = df[df["ULT Rec"] == "BUY"]
+        strong_buy = df[df["Combined Strategy"].str.contains("STRONG BUY", na=False)]
+        dip_buyers = df[df["Combined Strategy"].str.contains("BUY on Dips", na=False)]
+        avoid = df[df["Combined Strategy"].str.contains("AVOID", na=False)]
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("💎 Accumulate (3Y)", len(accumulate_stocks))
+        with col2:
+            st.metric("🚀 Strong Buy", len(strong_buy))
+        with col3:
+            st.metric("🔄 Buy on Dips", len(dip_buyers))
+        with col4:
+            st.metric("🔴 Avoid", len(avoid))
+        
+        # Show top picks by strategy
