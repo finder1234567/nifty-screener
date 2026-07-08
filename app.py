@@ -69,7 +69,7 @@ FALLBACK_NIFTY50 = {
     "SUNPHARMA.NS":   ("Sun Pharmaceutical", "Healthcare"),
     "TCS.NS":         ("Tata Consultancy Services", "Information Technology"),
     "TATACONSUM.NS":  ("Tata Consumer Products", "FMCG"),
-    "TATAMOTORS.NS":  ("Tata Motors", "Automobile"),
+    "TMPV.NS":        ("Tata Motors Passenger Vehicles", "Automobile"),
     "TATASTEEL.NS":   ("Tata Steel", "Metals & Mining"),
     "TECHM.NS":       ("Tech Mahindra", "Information Technology"),
     "TITAN.NS":       ("Titan Company", "Consumer Durables"),
@@ -877,10 +877,15 @@ def main():
     secondary_cols = [c for c in filtered.columns if c not in primary_cols]
     display_df = filtered[primary_cols + secondary_cols]
 
-    styled = display_df.style \
-        .applymap(highlight_recommendations, subset=["Combined Strategy", "Action"]) \
-        .applymap(highlight_fundamental_rating, subset=["Fundamental Rating"])
-    st.dataframe(styled, use_container_width=True, height=600, hide_index=True)
+    styler = display_df.style
+    try:
+        styler = styler.map(highlight_recommendations, subset=["Combined Strategy", "Action"]) \
+                        .map(highlight_fundamental_rating, subset=["Fundamental Rating"])
+    except AttributeError:
+        # Older pandas versions (<2.1) only have applymap, not map
+        styler = styler.applymap(highlight_recommendations, subset=["Combined Strategy", "Action"]) \
+                        .applymap(highlight_fundamental_rating, subset=["Fundamental Rating"])
+    st.dataframe(styler, use_container_width=True, height=600, hide_index=True)
 
     st.divider()
 
