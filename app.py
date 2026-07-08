@@ -631,4 +631,80 @@ def main():
             results = run_parallel_scan(subset, max_workers=max_workers, progress_callback=_cb)
         
         progress.empty()
-        st
+        st.session_state["scan_data"] = results
+
+        if not results:
+            st.warning("No results returned. The data source may be rate-limiting or the tickers had insufficient history.")
+
+    data = st.session_state["scan_data"]
+
+    if not data:
+        st.info("👈 Set your scan parameters in the sidebar and click **Initialize Deep Stock Scanning Engine** to begin.")
+        return
+
+    df = pd.DataFrame(data)
+
+    # ---------------------------------------------------------------
+    # FILTERS
+    # ---------------------------------------------------------------
+    st.subheader("📊 Scan Results")
+    fcol1, fcol2, fcol3 = st.columns(3)
+    with fcol1:
+        action_filter = st.multiselect(
+            "Filter by Action",
+            options=sorted(df["Action"].unique().tolist()),
+            default=[]
+        )
+    with fcol2:
+        st_rec_filter = st.multiselect(
+            "Filter by Short-Term Rec",
+            options=sorted(df["ST Rec"].unique().tolist()),
+            default=[]
+        )
+    with fcol3:
+        sort_col = st.selectbox(
+            "Sort by",
+            options=["ULT Score", "LT Score", "ST Score", "Stock"],
+            index=0
+        )
+
+    filtered = df.copy()
+    if action_filter:
+        filtered = filtered[filtered["Action"].isin(action_filter)]
+    if st_rec_filter:
+        filtered = filtered[filtered["ST Rec"].isin(st_rec_filter)]
+    filtered = filtered.sort_values(by=sort_col, ascending=False)
+
+    st.caption(f"Showing {len(filtered)} of {len(df)} scanned stocks")
+
+    styled = filtered.style.applymap(
+        highlight_recommendations,
+        subset=["Combined Strategy", "Action"]
+    )
+    st.dataframe(styled, use_container_width=True, height=600)
+
+    # ---------------------------------------------------------------
+    # EXPORT
+    # ---------------------------------------------------------------
+    if OPENPYXL_AVAILABLE:
+        buffer = BytesIO()
+        with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+            filtered.to_excel(writer, index=False, sheet_name="KOSPI200 Scan")
+        st.download_button(
+            label="📥 Download Results as Excel",
+            data=buffer.getvalue(),
+            file_name=f"kospi200_scan_{datetime.today().strftime('%Y%m%d_%H%M')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    else:
+        csv = filtered.to_csv(index=False).encode("utf-8-sig")
+        st.download_button(
+            label="📥 Download Results as CSV",
+            data=csv,
+            file_name=f"kospi200_scan_{datetime.today().strftime('%Y%m%d_%H%M')}.csv",
+            mime="text/csv"
+        )
+
+
+if __name__ == "__main__":
+    main()
