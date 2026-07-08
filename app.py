@@ -163,12 +163,15 @@ def get_kospi200_tickers():
             if tickers:
                 kospi_dict = {}
                 for t in tickers:
-                    try: kospi_dict[f"{t}.KS"] = krx_stock.get_market_ticker_name(t)
-                    except: kospi_dict[f"{t}.KS"] = f"Unknown ({t})"
+                    try: 
+                        kospi_dict[f"{t}.KS"] = krx_stock.get_market_ticker_name(t)
+                    except: 
+                        kospi_dict[f"{t}.KS"] = f"Unknown ({t})"
                 if len(kospi_dict) > 50:
                     sys.stdout = old_stdout
                     return kospi_dict
-        except: pass
+        except: 
+            pass
             
     for i in range(1, 5):
         safe_date = (datetime.today() - timedelta(days=i)).strftime("%Y%m%d")
@@ -177,12 +180,15 @@ def get_kospi200_tickers():
             if tickers:
                 kospi_dict = {}
                 for t in tickers[:100]:
-                    try: kospi_dict[f"{t}.KS"] = krx_stock.get_market_ticker_name(t)
-                    except: kospi_dict[f"{t}.KS"] = f"KOSPI Stock ({t})"
+                    try: 
+                        kospi_dict[f"{t}.KS"] = krx_stock.get_market_ticker_name(t)
+                    except: 
+                        kospi_dict[f"{t}.KS"] = f"KOSPI Stock ({t})"
                 if len(kospi_dict) > 50:
                     sys.stdout = old_stdout
                     return kospi_dict
-        except: pass
+        except: 
+            pass
             
     sys.stdout = old_stdout
     return dict(FALLBACK_KOSPI200)
@@ -442,7 +448,7 @@ def process_scoring(ind: dict, long_term: dict):
     elif ult_score <= 35: 
         ult_rec = "SELL"
     
-    # COMBINED VERDICT LOGIC
+    # COMBINED VERDICT LOGIC - LONG-TERM BUY RECOMMENDATIONS
     if ult_rec == "BUY" and (rec == "SELL" or lt_rec == "SELL"):
         combined_verdict = "💎 ACCUMULATE (3Y Bullish)"
         absolute_rec = "BUY (Long-term Hold)"
@@ -615,4 +621,14 @@ def main():
         st.session_state["scan_data"] = None
 
     if run_btn:
-        subset = dict(list(tickers_
+        subset = dict(list(tickers_all.items())[:subset_n])
+        progress = st.progress(0.0, text="Initializing scan...")
+        
+        def _cb(d, t):
+            progress.progress(d / t, text=f"Scanned {d}/{t} tickers...")
+        
+        with st.spinner("Processing tri-timeframe matrix transformations..."):
+            results = run_parallel_scan(subset, max_workers=max_workers, progress_callback=_cb)
+        
+        progress.empty()
+        st
