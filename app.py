@@ -50,7 +50,7 @@ class DummyOutput:
 
 
 # =========================================================================
-# BUILT-IN TECHNICAL INDICATOR CALCULATIONS (No ta library needed)
+# BUILT-IN TECHNICAL INDICATOR CALCULATIONS
 # =========================================================================
 def calculate_sma(data, window):
     """Simple Moving Average"""
@@ -248,10 +248,12 @@ def calculate_supertrend(df, period=7, multiplier=3.0):
     for i in range(1, len(df)):
         if basic_upper.iloc[i] < upper_band.iloc[i-1] or close.iloc[i-1] > upper_band.iloc[i-1]:
             upper_band.iloc[i] = basic_upper.iloc[i]
-        else: upper_band.iloc[i] = upper_band.iloc[i-1]
+        else: 
+            upper_band.iloc[i] = upper_band.iloc[i-1]
         if basic_lower.iloc[i] > lower_band.iloc[i-1] or close.iloc[i-1] < lower_band.iloc[i-1]:
             lower_band.iloc[i] = basic_lower.iloc[i]
-        else: lower_band.iloc[i] = lower_band.iloc[i-1]
+        else: 
+            lower_band.iloc[i] = lower_band.iloc[i-1]
             
     supertrend = pd.Series(0.0, index=df.index)
     direction = pd.Series(1, index=df.index)
@@ -282,7 +284,7 @@ def compute_all_indicators(df: pd.DataFrame) -> dict:
     macd_hist = calculate_macd(close)
     roc = ((close - close.shift(10)) / close.shift(10) * 100).fillna(0)
     stoch = calculate_stochastic(high, low, close, window=14, smooth=3)
-    williams_r = calculate_williams_r(high, low, close, lbp=14)
+    williams_r = calculate_williams_r(high, low, close, window=14)
     cci = calculate_cci(high, low, close, window=20)
     adx = calculate_adx(high, low, close, window=14)
     atr = calculate_atr(high, low, close, window=14)
@@ -291,8 +293,10 @@ def compute_all_indicators(df: pd.DataFrame) -> dict:
     
     bb_high, bb_low = calculate_bollinger_bands(close, window=20, num_std=2)
     bb_verdict = "Inside Bands"
-    if close.iloc[-1] > bb_high.iloc[-1]: bb_verdict = "Overbought"
-    elif close.iloc[-1] < bb_low.iloc[-1]: bb_verdict = "Oversold"
+    if close.iloc[-1] > bb_high.iloc[-1]: 
+        bb_verdict = "Overbought"
+    elif close.iloc[-1] < bb_low.iloc[-1]: 
+        bb_verdict = "Oversold"
     
     _, st_dir = calculate_supertrend(df)
     st_verdict = "BUY" if st_dir.iloc[-1] == 1 else "SELL"
@@ -311,7 +315,7 @@ def compute_all_indicators(df: pd.DataFrame) -> dict:
     }
 
 def compute_long_term_indicators(df: pd.DataFrame) -> dict:
-    """Compute long-term trend indicators (200-day MA, annual momentum)"""
+    """Compute long-term trend indicators"""
     close = df["Close"]
     
     sma200 = calculate_sma(close, window=200)
@@ -325,11 +329,11 @@ def compute_long_term_indicators(df: pd.DataFrame) -> dict:
     resistance = high_52w
     distance_to_support = ((close.iloc[-1] - support) / support) * 100
     
-    # 3-Year trend (if available)
+    # 3-Year trend
     if len(df) >= 756:
         sma_3y = calculate_sma(close, window=756)
         trend_3y = "Bullish" if close.iloc[-1] > sma_3y.iloc[-1] else "Bearish"
-        return_3y = ((close.iloc[-1] - close.iloc[-756]) / close.iloc[-756]) * 100 if len(close) >= 756 else annual_return
+        return_3y = ((close.iloc[-1] - close.iloc[-756]) / close.iloc[-756]) * 100
     else:
         trend_3y = long_term_trend
         return_3y = annual_return
@@ -355,53 +359,76 @@ def get_google_news(company_name: str):
     try:
         resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=5)
         item = ET.fromstring(resp.content).find(".//item")
-        if item is not None: return item.findtext("title"), item.findtext("link"), "Google News KR"
-    except: pass
+        if item is not None: 
+            return item.findtext("title"), item.findtext("link"), "Google News KR"
+    except: 
+        pass
     return "No recent headline found", "#", "N/A"
 
 def process_scoring(ind: dict, long_term: dict):
     """Generate short-term, long-term, and ultra long-term recommendations"""
     
-    # ========== SHORT-TERM MOMENTUM SCORE ==========
+    # SHORT-TERM MOMENTUM SCORE
     score = 50.0
-    if ind["rsi"] < 30: score += 15
-    elif ind["rsi"] > 70: score -= 15
-    if ind["macd_hist"] > 0: score += 10
-    else: score -= 5
-    if ind["supertrend"] == "BUY": score += 10
-    else: score -= 10
-    if ind["cci"] > 100: score += 5
-    elif ind["cci"] < -100: score -= 5
+    if ind["rsi"] < 30: 
+        score += 15
+    elif ind["rsi"] > 70: 
+        score -= 15
+    if ind["macd_hist"] > 0: 
+        score += 10
+    else: 
+        score -= 5
+    if ind["supertrend"] == "BUY": 
+        score += 10
+    else: 
+        score -= 10
+    if ind["cci"] > 100: 
+        score += 5
+    elif ind["cci"] < -100: 
+        score -= 5
     
     score = max(0.0, min(100.0, score))
     rec = "HOLD"
-    if score >= 65: rec = "BUY"
-    elif score <= 35: rec = "SELL"
+    if score >= 65: 
+        rec = "BUY"
+    elif score <= 35: 
+        rec = "SELL"
     
-    # ========== LONG-TERM (1-YEAR) STRATEGIC SCORE ==========
+    # LONG-TERM (1-YEAR) STRATEGIC SCORE
     lt_score = 50.0
-    if long_term["long_term_trend"] == "Bullish": lt_score += 25
-    else: lt_score -= 20
+    if long_term["long_term_trend"] == "Bullish": 
+        lt_score += 25
+    else: 
+        lt_score -= 20
     
-    if long_term["annual_return"] > 15: lt_score += 15
-    elif long_term["annual_return"] < -10: lt_score -= 15
+    if long_term["annual_return"] > 15: 
+        lt_score += 15
+    elif long_term["annual_return"] < -10: 
+        lt_score -= 15
     
     if long_term["distance_to_support"] < 5:
         lt_score += 20
     
     lt_score = max(0.0, min(100.0, lt_score))
     lt_rec = "HOLD"
-    if lt_score >= 65: lt_rec = "BUY"
-    elif lt_score <= 35: lt_rec = "SELL"
+    if lt_score >= 65: 
+        lt_rec = "BUY"
+    elif lt_score <= 35: 
+        lt_rec = "SELL"
     
-    # ========== ULTRA LONG-TERM (3-YEAR) STRATEGIC SCORE ==========
+    # ULTRA LONG-TERM (3-YEAR) STRATEGIC SCORE
     ult_score = 50.0
-    if long_term["trend_3y"] == "Bullish": ult_score += 35
-    else: ult_score -= 25
+    if long_term["trend_3y"] == "Bullish": 
+        ult_score += 35
+    else: 
+        ult_score -= 25
     
-    if long_term["return_3y"] > 30: ult_score += 25
-    elif long_term["return_3y"] > 10: ult_score += 15
-    elif long_term["return_3y"] < -20: ult_score -= 25
+    if long_term["return_3y"] > 30: 
+        ult_score += 25
+    elif long_term["return_3y"] > 10: 
+        ult_score += 15
+    elif long_term["return_3y"] < -20: 
+        ult_score -= 25
     
     if long_term["distance_to_support"] < 10:
         ult_score += 15
@@ -410,10 +437,12 @@ def process_scoring(ind: dict, long_term: dict):
     
     ult_score = max(0.0, min(100.0, ult_score))
     ult_rec = "HOLD"
-    if ult_score >= 65: ult_rec = "BUY"
-    elif ult_score <= 35: ult_rec = "SELL"
+    if ult_score >= 65: 
+        ult_rec = "BUY"
+    elif ult_score <= 35: 
+        ult_rec = "SELL"
     
-    # ========== COMBINED VERDICT LOGIC ==========
+    # COMBINED VERDICT LOGIC
     if ult_rec == "BUY" and (rec == "SELL" or lt_rec == "SELL"):
         combined_verdict = "💎 ACCUMULATE (3Y Bullish)"
         absolute_rec = "BUY (Long-term Hold)"
@@ -455,7 +484,8 @@ def scan_single_ticker(ticker: str, name: str):
         
         df = df.dropna(subset=["Close", "High", "Low", "Volume"])
         
-        if df.empty or len(df) < 50: return None
+        if df.empty or len(df) < 50: 
+            return None
         
         try:
             info = ticker_obj.info
@@ -525,7 +555,6 @@ def scan_single_ticker(ticker: str, name: str):
             "Volume": f"{latest['volume']:,.0f}"
         }
     except Exception as e:
-        print(f"Error processing {ticker}: {str(e)}")
         return None
 
 def run_parallel_scan(tickers_dict: dict, max_workers: int = 8, progress_callback=None):
@@ -536,29 +565,31 @@ def run_parallel_scan(tickers_dict: dict, max_workers: int = 8, progress_callbac
         futures = {executor.submit(scan_single_ticker, t, n): (t, n) for t, n in tickers_dict.items()}
         for future in concurrent.futures.as_completed(futures):
             done += 1
-            if progress_callback: progress_callback(done, total)
+            if progress_callback: 
+                progress_callback(done, total)
             res = future.result()
-            if res: results.append(res)
+            if res: 
+                results.append(res)
     return results
 
 
 # =========================================================================
 # COLOR STYLING FUNCTION
 # =========================================================================
-def highlight_dual_recommendation(val):
+def highlight_recommendations(val):
     """Color code recommendations"""
     if isinstance(val, str):
         if "STRONG BUY" in val or "ACCUMULATE" in val:
             return 'background-color: #1e5631; color: #ffffff; font-weight: bold;'
-        elif "BUY on Dips" in val or "CAUTIOUS" in val:
+        elif "BUY on Dips" in val:
             return 'background-color: #cce5ff; color: #004085; font-weight: bold;'
-        elif ("BUY" in val.upper() or "Long-term Hold" in val) and "REC" not in val:
+        elif "BUY" in val.upper() and "REC" not in val and "STRONG" not in val:
             return 'background-color: #d4edda; color: #155724; font-weight: bold;'
-        elif "AVOID" in val or "DOWNTREND" in val:
+        elif "AVOID" in val:
             return 'background-color: #8b0000; color: #ffffff; font-weight: bold;'
         elif "SELL" in val.upper():
             return 'background-color: #f8d7da; color: #721c24; font-weight: bold;'
-        elif "HOLD" in val.upper() or "TAKE PROFITS" in val:
+        elif "HOLD" in val.upper() or "CAUTIOUS" in val:
             return 'background-color: #fff3cd; color: #856404; font-weight: bold;'
     return ''
 
@@ -566,3 +597,22 @@ def highlight_dual_recommendation(val):
 # =========================================================================
 # APPLICATION UI
 # =========================================================================
+def main():
+    st.set_page_config(page_title="KOSPI 200 Advanced Screener", layout="wide")
+    st.title("🇰🇷 KOSPI 200 Tri-Timeframe Momentum Screener")
+    st.caption("Short-term momentum + Long-term trends + Ultra long-term (3Y) accumulation signals")
+
+    tickers_all = get_kospi200_tickers()
+    
+    with st.sidebar:
+        st.header("⚙️ Scanning Framework")
+        subset_n = st.slider("Universe Depth Scan Size", 5, len(tickers_all), min(38, len(tickers_all)))
+        max_workers = st.slider("Parallel Threads Execution", 2, 16, 8)
+        
+        run_btn = st.button("🔍 Initialize Deep Stock Scanning Engine", type="primary", use_container_width=True)
+
+    if "scan_data" not in st.session_state:
+        st.session_state["scan_data"] = None
+
+    if run_btn:
+        subset = dict(list(tickers_
